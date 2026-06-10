@@ -1,0 +1,39 @@
+# {{ repo_name }} — Database Schema
+
+{% for ed in er_diagrams %}
+## {{ ed.language | title }} — {{ ed.orm_framework }}
+
+{{ ed.summary }}
+
+### ER Diagram
+
+\`\`\`mermaid
+erDiagram
+{% for table in ed.tables %}
+    {{ table.name }} {
+{% for col in table.columns %}
+        {{ col.type }} {{ col.name }}{% if col.primary_key %} PK{% endif %}{% if col.foreign_key %} FK "{{ col.foreign_key }}"{% endif %}
+{% endfor %}
+    }
+{% endfor %}
+{% if not ed.tables %}
+    NO_TABLES { string note "No tables detected" }
+{% endif %}
+\`\`\`
+
+{% if ed.tables %}
+### Table Details
+
+{% for table in ed.tables %}
+#### {{ table.name }}
+
+| Column | Type | Nullable | PK | FK |
+|--------|------|----------|----|----|
+{% for col in table.columns %}
+| {{ col.name }} | {{ col.type }} | {{ "Yes" if col.nullable else "No" }} | {{ "✅" if col.primary_key else "" }} | {{ col.foreign_key or "" }} |
+{% endfor %}
+
+{% endfor %}
+{% endif %}
+
+{% endfor %}

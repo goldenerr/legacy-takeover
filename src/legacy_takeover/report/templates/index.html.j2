@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ repo_name }} — System Takeover Report</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--border:#30363d;--text:#c9d1d9;--accent:#58a6ff;--red:#f85149;--orange:#d2991d;--green:#3fb950}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);padding:24px}
+.container{max-width:1000px;margin:0 auto}
+h1{font-size:1.5em;margin-bottom:4px}
+.subtitle{color:#8b949e;margin-bottom:24px;font-size:.9em}
+.tabs{display:flex;gap:2px;margin-bottom:24px;flex-wrap:wrap}
+.tab{padding:8px 16px;background:var(--card);border:1px solid var(--border);border-radius:6px 6px 0 0;cursor:pointer;font-size:.88em}
+.tab.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.tab-content{display:none;background:var(--card);border:1px solid var(--border);border-radius:0 8px 8px 8px;padding:24px}
+.tab-content.active{display:block}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-bottom:24px}
+.stat{padding:16px;background:var(--card);border:1px solid var(--border);border-radius:8px;text-align:center}
+.stat .num{font-size:1.8em;font-weight:700;color:var(--accent)}
+.stat .label{font-size:.8em;color:#8b949e;margin-top:4px}
+table{width:100%;border-collapse:collapse;font-size:.88em;margin:12px 0}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border)}
+th{color:#8b949e;font-weight:500;text-transform:uppercase;font-size:.75em;letter-spacing:.05em}
+.sev-critical{color:var(--red);font-weight:700}.sev-high{color:var(--orange);font-weight:700}
+.sev-medium{color:#d2991d}.sev-low{color:var(--green)}.sev-info{color:#8b949e}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🧬 {{ repo_name }}</h1>
+<p class="subtitle">System Takeover Report — {{ generated_at }} — Depth: {{ depth }}</p>
+
+<div class="stats">
+<div class="stat"><div class="num">{{ languages | length }}</div><div class="label">Languages</div></div>
+<div class="stat"><div class="num">{{ total_modules }}</div><div class="label">Modules</div></div>
+<div class="stat"><div class="num">{{ total_deps }}</div><div class="label">Dependencies</div></div>
+<div class="stat"><div class="num">{{ total_tables }}</div><div class="label">DB Tables</div></div>
+<div class="stat"><div class="num">{{ total_risks }}</div><div class="label">Risks</div></div>
+</div>
+
+<div class="tabs">
+<div class="tab active" onclick="switchTab(event,'overview')">Overview</div>
+<div class="tab" onclick="switchTab(event,'architecture')">Architecture</div>
+<div class="tab" onclick="switchTab(event,'database')">Database</div>
+<div class="tab" onclick="switchTab(event,'dependencies')">Dependencies</div>
+<div class="tab" onclick="switchTab(event,'risks')">Risks</div>
+</div>
+
+<div id="overview" class="tab-content active">
+<h2>Languages</h2>
+<p>{{ languages | join(", ") or "none detected" }}</p>
+<h3>External Dependencies ({{ external_deps | length }})</h3>
+<ul>{% for d in external_deps %}<li><code>{{ d }}</code></li>{% endfor %}</ul>
+</div>
+
+<div id="architecture" class="tab-content">
+<h2>Architecture</h2>
+{% for mg in module_graphs %}
+<h3>{{ mg.language | title }} — {{ mg.summary }}</h3>
+<table><tr><th>Module</th><th>Type</th><th>Path</th></tr>
+{% for m in mg.modules %}<tr><td>{{ m.name }}</td><td>{{ m.type.value }}</td><td><code>{{ m.path }}</code></td></tr>{% endfor %}</table>
+<div class="mermaid">graph TD
+{% for m in mg.modules %}{{ m.name.replace('-','_').replace('.','_') }}[{{ m.name }}]
+{% endfor %}</div>
+{% endfor %}
+</div>
+
+<div id="database" class="tab-content">
+<h2>Database Schema</h2>
+{% for ed in er_diagrams %}
+<h3>{{ ed.language | title }} — {{ ed.orm_framework }}</h3>
+{% for t in ed.tables %}
+<h4>{{ t.name }}</h4>
+<table><tr><th>Column</th><th>Type</th><th>Nullable</th><th>PK</th></tr>
+{% for c in t.columns %}<tr><td>{{ c.name }}</td><td>{{ c.type }}</td><td>{{ "Yes" if c.nullable else "No" }}</td><td>{{ "✅" if c.primary_key else "" }}</td></tr>{% endfor %}</table>
+{% endfor %}
+{% endfor %}
+</div>
+
+<div id="dependencies" class="tab-content">
+<h2>Dependencies</h2>
+<div class="mermaid">graph LR
+{% for dt in dependency_trees %}{% for e in dt.edges %}{{ e.from_module.replace('-','_').replace('.','_') }} -->|{{ e.type.value }}| {{ e.to_module.replace('-','_').replace('.','_') }}
+{% endfor %}{% endfor %}</div>
+</div>
+
+<div id="risks" class="tab-content">
+<h2>Risk Report ({{ total_risks }} total)</h2>
+<table><tr><th>ID</th><th>Severity</th><th>Title</th><th>Category</th><th>File</th><th>Score</th></tr>
+{% for r in risks %}
+<tr>
+<td>{{ r.id }}</td>
+<td class="sev-{{ r.severity.name.lower() }}">{{ r.severity.name }}</td>
+<td>{{ r.title }}</td><td>{{ r.category.value }}</td>
+<td><code>{{ r.file }}{% if r.line %}:{{ r.line }}{% endif %}</code></td>
+<td>{{ "%.1f"|format(r.risk_score) }}</td>
+</tr>
+{% endfor %}</table>
+</div>
+</div>
+
+<script>
+mermaid.initialize({startOnLoad:true,theme:'dark'});
+function switchTab(e,t){document.querySelectorAll('.tab').forEach(el=>el.classList.remove('active'));document.querySelectorAll('.tab-content').forEach(el=>el.classList.remove('active'));e.target.classList.add('active');document.getElementById(t).classList.add('active')}
+</script>
+</body>
+</html>

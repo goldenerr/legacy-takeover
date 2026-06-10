@@ -1,0 +1,35 @@
+# {{ repo_name }} — Risk Report
+
+**Total Risks:** {{ total_risks }}
+
+## Risk Distribution
+
+| Severity | Count |
+|----------|-------|
+| 🔴 Critical | {{ risk_summary.critical }} |
+| 🟠 High | {{ risk_summary.high }} |
+| 🟡 Medium | {{ risk_summary.medium }} |
+| 🟢 Low | {{ risk_summary.low }} |
+| 🔵 Info | {{ risk_summary.info }} |
+
+## All Risks (sorted by score)
+
+{% for risk in risks %}
+### {{ risk.severity.name }}: {{ risk.title }}
+
+- **ID:** {{ risk.id }}
+- **Category:** {{ risk.category.value }}
+- **Score:** {{ "%.1f" | format(risk.risk_score) }} (severity {{ risk.severity.value }} × confidence {{ "%.2f" | format(risk.confidence) }})
+- **File:** `{{ risk.file }}{% if risk.line %}:{{ risk.line }}{% endif %}`
+{% if risk.evidence %}
+- **Evidence:** `{{ risk.evidence }}`
+{% endif %}
+{% if risk.recommendation %}
+- **Recommendation:** {{ risk.recommendation }}
+{% endif %}
+
+{{ risk.description }}
+
+---
+{% endfor %}
+{% if not risks %}_No risks detected — great job!_{% endif %}

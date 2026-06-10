@@ -1,0 +1,23 @@
+# {{ repo_name }} — Architecture
+
+{% for mg in module_graphs %}
+## {{ mg.language | title }} Layer
+
+{{ mg.summary }}
+
+| Module | Type | Path |
+|--------|------|------|
+{% for m in mg.modules %}
+| {{ m.name }} | {{ m.type.value }} | {{ m.path }} |
+{% endfor %}
+
+### Component Diagram
+
+\`\`\`mermaid
+graph TD
+{% for m in mg.modules %}
+    {{ m.name.replace('-','_').replace('.','_') }}[{{ m.name }}]
+{% endfor %}
+\`\`\`
+
+{% endfor %}

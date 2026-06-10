@@ -1,0 +1,40 @@
+# {{ repo_name }} — System Takeover Manual
+
+**Generated:** {{ generated_at }} | **Depth:** {{ depth }} | **URL:** {{ repo_url }}
+
+## Overview
+- **Languages:** {{ languages | join(", ") or "none detected" }}
+- **Modules:** {{ total_modules }}
+- **Internal Dependencies:** {{ total_deps }}
+- **External Dependencies:** {{ external_deps | length }}
+- **Database Tables:** {{ total_tables }}
+- **Total Risks:** {{ total_risks }}
+
+## Quick Statistics
+| Metric | Value |
+|--------|-------|
+| Languages | {{ languages | join(", ") }} |
+| Total Modules | {{ total_modules }} |
+| Internal Dependencies | {{ total_deps }} |
+| External Dependencies | {{ external_deps | length }} |
+| Database Tables | {{ total_tables }} |
+| 🔴 Critical Risks | {{ risk_summary.critical }} |
+| 🟠 High Risks | {{ risk_summary.high }} |
+| 🟡 Medium Risks | {{ risk_summary.medium }} |
+| 🟢 Low Risks | {{ risk_summary.low }} |
+| 🔵 Info | {{ risk_summary.info }} |
+
+## External Dependencies
+{% for dep in external_deps %}
+- {{ dep }}
+{% endfor %}
+
+{% if not external_deps %}_No external dependencies detected_{% endif %}
+
+## Risk Summary
+{% for risk in risks[:20] %}
+- **[{{ risk.severity.name }}] {{ risk.title }}** — `{{ risk.file }}{% if risk.line %}:{{ risk.line }}{% endif %}` — {{ risk.description }}
+{% endfor %}
+{% if not risks %}_No risks detected_{% endif %}
+
+> See ARCHITECTURE.md, DATABASE.md, DEPENDENCIES.md, and RISK_REPORT.md for detailed breakdowns.

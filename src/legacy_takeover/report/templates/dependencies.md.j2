@@ -1,0 +1,21 @@
+# {{ repo_name }} — Dependencies
+
+## External Dependencies
+{% for dep in external_deps %}
+- `{{ dep }}`
+{% endfor %}
+{% if not external_deps %}_No external dependencies_{% endif %}
+
+## Dependency Graph
+
+```mermaid
+graph LR
+{% for dt in dependency_trees %}
+{% for edge in dt.edges %}
+    {{ edge.from_module.replace('-','_').replace('.','_') }} -->|{{ edge.type.value }}| {{ edge.to_module.replace('-','_').replace('.','_') }}
+{% endfor %}
+{% endfor %}
+{% if not has_dep_edges %}
+    A["No dependencies detected"]
+{% endif %}
+```
