@@ -18,11 +18,11 @@
 {% if ns.has_endpoints %}
 ### API Endpoints
 
-| Module | Method | Path |
-|--------|--------|------|
+| Module | Method | Path | Method | Returns |
+|--------|--------|------|--------|---------|
 {% for m in mg.modules %}
 {% for ep in m.metadata.get("endpoints", []) %}
-| {{ m.name }} | {{ ep.get("method", "?") }} | `{{ ep.get("path", ep.get("route", "?")) }}` |
+| {{ m.name }} | **`{{ ep.get("method", "?") }}`** | `{{ ep.get("path", ep.get("route", "?")) }}` | {{ ep.get("method_name", "?") }} | `{{ ep.get("return_type", "?") }}` |
 {% endfor %}
 {% endfor %}
 {% endif %}

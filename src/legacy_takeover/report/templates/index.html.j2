@@ -97,15 +97,15 @@ th{color:#8b949e;font-weight:500;text-transform:uppercase;font-size:.75em;letter
 <h2>Architecture</h2>
 {% for mg in module_graphs %}
 <h3>{{ mg.language | title }} — {{ mg.summary }}</h3>
-<table><tr><th>Module</th><th>Type</th><th>Path</th></tr>
-{% for m in mg.modules %}<tr><td>{{ m.name }}</td><td>{{ m.type.value }}</td><td><code>{{ m.path }}</code></td></tr>{% endfor %}</table>
+<table><tr><th>Module</th><th>Type</th><th>Role</th><th>Path</th></tr>
+{% for m in mg.modules %}<tr><td>{{ m.name }}</td><td>{{ m.type.value }}</td><td><span class="role-badge">{{ m.metadata.get("role", "—") }}</span></td><td><code>{{ m.path }}</code></td></tr>{% endfor %}</table>
 
 {% if system_context.api_endpoints %}
 <h4>API Endpoints</h4>
 <table>
-<tr><th>Module</th><th>Method</th><th>Path</th></tr>
+<tr><th>Module</th><th>Method</th><th>Path</th><th>Method</th><th>Returns</th></tr>
 {% for ep in system_context.api_endpoints %}
-<tr><td>{{ ep.module }}</td><td>{{ ep.get("method", "?") }}</td><td><code>{{ ep.get("path", ep.get("route", "?")) }}</code></td></tr>
+<tr><td>{{ ep.module }}</td><td><strong>{{ ep.get("method", "?") }}</strong></td><td><code>{{ ep.get("path", ep.get("route", "?")) }}</code></td><td>{{ ep.get("method_name", "?") }}</td><td><code>{{ ep.get("return_type", "?") }}</code></td></tr>
 {% endfor %}
 </table>
 {% endif %}

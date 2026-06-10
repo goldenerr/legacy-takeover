@@ -1,0 +1,12 @@
+# {{ repo_name }} — API Endpoints
+
+**Total:** {{ system_context.api_endpoints | length if system_context.api_endpoints else 0 }} endpoints
+
+| Method | Path | Controller | Method | Returns |
+|--------|------|------------|--------|---------|
+{% for ep in system_context.api_endpoints %}
+| **`{{ ep.method }}`** | `{{ ep.path }}` | {{ ep.module }} | {{ ep.method_name }} | `{{ ep.return_type }}` |
+{% endfor %}
+{% if not system_context.api_endpoints %}
+_No REST API endpoints detected._
+{% endif %}

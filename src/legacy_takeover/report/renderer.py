@@ -21,6 +21,7 @@ def render_report(result: ScanResult, output_dir: Path, repo_url: str = "") -> N
     templates = {
         "system_manual.md.j2": "SYSTEM_MANUAL.md",
         "architecture.md.j2": "ARCHITECTURE.md",
+        "api_endpoints.md.j2": "API_ENDPOINTS.md",
         "database.md.j2": "DATABASE.md",
         "dependencies.md.j2": "DEPENDENCIES.md",
         "risk_report.md.j2": "RISK_REPORT.md",

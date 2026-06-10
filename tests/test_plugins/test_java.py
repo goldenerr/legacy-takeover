@@ -442,3 +442,417 @@ class TestJavaAnalyzer:
             assert len(tree.external_deps) >= 1
             # spring-boot-starter should be detected
             assert any("spring-boot-starter" in d for d in tree.external_deps)
+
+    # ── P1-1: Enhanced REST API extraction ──────────────────────────────────
+
+    def test_rest_endpoints_full_extraction(self):
+        """Extract method_name, return_type, params, path_vars from @RestController."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java" / "com" / "example"
+            src.mkdir(parents=True)
+            (src / "UserController.java").write_text(
+                "package com.example;\n"
+                "import org.springframework.web.bind.annotation.*;\n"
+                "@RestController\n"
+                'public class UserController {\n'
+                '  @GetMapping("/users/{id}")\n'
+                "  public User getUser(@PathVariable Long id, @RequestParam String name) {\n"
+                "    return null;\n"
+                "  }\n"
+                '  @PostMapping("/users")\n'
+                "  public User createUser(@RequestBody User user) {\n"
+                "    return null;\n"
+                "  }\n"
+                '  @DeleteMapping("/users/{id}")\n'
+                '  public void deleteUser(@PathVariable("id") Long userId) {\n'
+                "  }\n"
+                "}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            graph = a.extract_structure()
+
+            pkg_mod = graph.modules[0]
+            endpoints = pkg_mod.metadata.get("endpoints", [])
+            assert len(endpoints) == 3, f"Expected 3 endpoints, got {len(endpoints)}"
+
+            # Check first endpoint (GET /users/{id})
+            get_ep = next((e for e in endpoints if e["method"] == "GET"), None)
+            assert get_ep is not None
+            assert get_ep["path"] == "/users/{id}"
+            assert get_ep["method_name"] == "getUser"
+            assert get_ep["return_type"] == "User"
+            assert "name" in get_ep["params"]
+            assert "id" in get_ep["path_vars"]
+
+            # Check POST /users
+            post_ep = next((e for e in endpoints if e["method"] == "POST"), None)
+            assert post_ep is not None
+            assert post_ep["path"] == "/users"
+            assert post_ep["method_name"] == "createUser"
+
+    def test_rest_endpoints_requestmapping_with_method(self):
+        """Extract @RequestMapping with explicit method= attribute."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java" / "com" / "example"
+            src.mkdir(parents=True)
+            (src / "LegacyController.java").write_text(
+                "package com.example;\n"
+                "import org.springframework.web.bind.annotation.*;\n"
+                "@RestController\n"
+                'public class LegacyController {\n'
+                '  @RequestMapping(value = "/legacy", method = RequestMethod.PUT)\n'
+                "  public String handleLegacy() {\n"
+                '    return "ok";\n'
+                "  }\n"
+                "}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            graph = a.extract_structure()
+
+            pkg_mod = graph.modules[0]
+            endpoints = pkg_mod.metadata.get("endpoints", [])
+            assert len(endpoints) == 1
+            assert endpoints[0]["method"] == "PUT"
+            assert endpoints[0]["path"] == "/legacy"
+
+    # ── P1-3: Module role inference ─────────────────────────────────────────
+
+    def test_module_role_inference_controller(self):
+        """Controller package gets REST_API_LAYER role."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java" / "com" / "example" / "controller"
+            src.mkdir(parents=True)
+            (src / "UserController.java").write_text(
+                "package com.example.controller;\n"
+                "@RestController\n"
+                "public class UserController {}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            graph = a.extract_structure()
+            pkg_mod = graph.modules[0]
+            assert pkg_mod.metadata.get("role") == "REST_API_LAYER"
+
+    def test_module_role_inference_service(self):
+        """Service package gets BUSINESS_LOGIC role."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java" / "com" / "example" / "service"
+            src.mkdir(parents=True)
+            (src / "UserService.java").write_text(
+                "package com.example.service;\n"
+                "@Service\n"
+                "public class UserService {}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            graph = a.extract_structure()
+            pkg_mod = graph.modules[0]
+            assert pkg_mod.metadata.get("role") == "BUSINESS_LOGIC"
+
+    def test_module_role_inference_repository(self):
+        """Repository/dao/mapper package gets DATA_ACCESS role."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java" / "com" / "example" / "dao"
+            src.mkdir(parents=True)
+            (src / "UserDao.java").write_text(
+                "package com.example.dao;\n"
+                "public class UserDao {}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            graph = a.extract_structure()
+            pkg_mod = graph.modules[0]
+            assert pkg_mod.metadata.get("role") == "DATA_ACCESS"
+
+    def test_module_role_unknown(self):
+        """Unknown package gets UNKNOWN role."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java" / "com" / "example" / "mystuff"
+            src.mkdir(parents=True)
+            (src / "Foo.java").write_text(
+                "package com.example.mystuff;\n"
+                "public class Foo {}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            graph = a.extract_structure()
+            pkg_mod = graph.modules[0]
+            assert pkg_mod.metadata.get("role") == "UNKNOWN"
+
+    # ── P1-4: Layer violation checks ────────────────────────────────────────
+
+    def test_layer_violation_controller_direct_repo(self):
+        """Controller directly importing Repository should trigger layer violation."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java"
+            ctrl_dir = src / "com" / "example" / "controller"
+            repo_dir = src / "com" / "example" / "repository"
+            ctrl_dir.mkdir(parents=True)
+            repo_dir.mkdir(parents=True)
+
+            (repo_dir / "UserRepository.java").write_text(
+                "package com.example.repository;\n"
+                "public class UserRepository {}\n"
+            )
+            (ctrl_dir / "UserController.java").write_text(
+                "package com.example.controller;\n"
+                "import com.example.repository.UserRepository;\n"
+                "@org.springframework.web.bind.annotation.RestController\n"
+                "public class UserController {\n"
+                "  private UserRepository repo;\n"
+                "}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            risks = a.assess_risks()
+            layer_risks = [
+                r for r in risks
+                if "Controller directly accesses" in r.title
+            ]
+            assert len(layer_risks) >= 1, (
+                f"Expected layer violation risk, got: {[r.title for r in risks]}"
+            )
+
+    # ── P1-5: Circular dependency detection ─────────────────────────────────
+
+    def test_circular_dependency_detection(self):
+        """Two modules importing each other should trigger circular dep risk."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java"
+            mod_a = src / "com" / "example" / "a"
+            mod_b = src / "com" / "example" / "b"
+            mod_a.mkdir(parents=True)
+            mod_b.mkdir(parents=True)
+
+            (mod_a / "A.java").write_text(
+                "package com.example.a;\n"
+                "import com.example.b.B;\n"
+                "public class A { B b; }\n"
+            )
+            (mod_b / "B.java").write_text(
+                "package com.example.b;\n"
+                "import com.example.a.A;\n"
+                "public class B { A a; }\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            risks = a.assess_risks()
+            cycle_risks = [
+                r for r in risks
+                if "Circular dependency" in r.title
+            ]
+            assert len(cycle_risks) >= 1, (
+                f"Expected circular dependency risk, got: {[r.title for r in risks]}"
+            )
+
+    def test_no_circular_dependency_false_positive(self):
+        """Acyclic modules should not trigger circular dep risk."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java"
+            mod_a = src / "com" / "example" / "a"
+            mod_b = src / "com" / "example" / "b"
+            mod_a.mkdir(parents=True)
+            mod_b.mkdir(parents=True)
+
+            (mod_a / "A.java").write_text(
+                "package com.example.a;\n"
+                "public class A {}\n"
+            )
+            (mod_b / "B.java").write_text(
+                "package com.example.b;\n"
+                "import com.example.a.A;\n"
+                "public class B { A a; }\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            risks = a.assess_risks()
+            cycle_risks = [
+                r for r in risks
+                if "Circular dependency" in r.title
+            ]
+            assert len(cycle_risks) == 0, (
+                f"Expected no circular dep, got: {[r.title for r in risks]}"
+            )
+
+    # ── P1-6: DB config extraction ──────────────────────────────────────────
+
+    def test_db_config_from_application_yml(self):
+        """Extract DB type, hosts, databases, pool from application.yml."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "application.yml").write_text(
+                "spring:\n"
+                "  datasource:\n"
+                "    url: jdbc:mysql://db.example.com:3306/mydb\n"
+                "    hikari:\n"
+                "      minimum-idle: 5\n"
+                "      maximum-pool-size: 20\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            config = a._extract_db_config()
+            assert config["type"] == "MYSQL"
+            assert "db.example.com:3306" in config["hosts"]
+            assert "mydb" in config["databases"]
+            assert config["pool"].get("min_idle") == 5
+            assert config["pool"].get("max_size") == 20
+
+    def test_db_config_flyway_detection(self):
+        """Detect Flyway migration when db/migration directory exists."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            migration_dir = repo / "src" / "main" / "resources" / "db" / "migration"
+            migration_dir.mkdir(parents=True)
+            (migration_dir / "V1__init.sql").write_text("-- init")
+            a = JavaAnalyzer(repo_path=repo)
+            config = a._extract_db_config()
+            assert config.get("migration") == "Flyway"
+
+    def test_db_config_liquibase_detection(self):
+        """Detect Liquibase when changelog XML files exist."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "db").mkdir()
+            (repo / "db" / "changelog-master.xml").write_text(
+                '<databaseChangeLog></databaseChangeLog>'
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            config = a._extract_db_config()
+            assert config.get("migration") == "Liquibase"
+
+    # ── P1-7: Cache analysis ────────────────────────────────────────────────
+
+    def test_cache_redis_detection(self):
+        """Detect Redis cache from pom.xml dependency."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "pom.xml").write_text(
+                "<project>"
+                "<dependencies>"
+                "<dependency><artifactId>spring-boot-starter-data-redis</artifactId></dependency>"
+                "</dependencies>"
+                "</project>"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            cache = a._extract_cache_info()
+            assert cache["type"] == "Redis"
+
+    def test_cacheable_annotation_extraction(self):
+        """Extract @Cacheable annotations from Java files."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java" / "com" / "example"
+            src.mkdir(parents=True)
+            (repo / "pom.xml").write_text(
+                "<project>"
+                "<dependencies>"
+                "<dependency><artifactId>spring-boot-starter-data-redis</artifactId></dependency>"
+                "</dependencies>"
+                "</project>"
+            )
+            (src / "UserService.java").write_text(
+                "package com.example;\n"
+                "import org.springframework.cache.annotation.Cacheable;\n"
+                "@Service\n"
+                "public class UserService {\n"
+                '  @Cacheable(value = "users", key = "#id")\n'
+                "  public User getUser(Long id) { return null; }\n"
+                '  @Cacheable("products")\n'
+                "  public Product getProduct(Long id) { return null; }\n"
+                "}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            cache = a._extract_cache_info()
+            assert cache["type"] == "Redis"
+            assert len(cache["entries"]) >= 2
+
+            user_entry = next(
+                (e for e in cache["entries"] if e["name"] == "users"), None
+            )
+            assert user_entry is not None
+            assert user_entry["key"] == "#id"
+            assert "UserService.java" in user_entry["file"]
+
+    # ── P1-8: MQ analysis ───────────────────────────────────────────────────
+
+    def test_mq_kafka_detection(self):
+        """Detect Kafka from pom.xml dependency."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "pom.xml").write_text(
+                "<project>"
+                "<dependencies>"
+                "<dependency><artifactId>spring-kafka</artifactId></dependency>"
+                "</dependencies>"
+                "</project>"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            mq = a._extract_mq_info()
+            assert mq["type"] == "Kafka"
+
+    def test_mq_kafka_listener_extraction(self):
+        """Extract @KafkaListener topics and groups."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java" / "com" / "example"
+            src.mkdir(parents=True)
+            (repo / "pom.xml").write_text(
+                "<project>"
+                "<dependencies>"
+                "<dependency><artifactId>spring-kafka</artifactId></dependency>"
+                "</dependencies>"
+                "</project>"
+            )
+            (src / "OrderConsumer.java").write_text(
+                "package com.example;\n"
+                "import org.springframework.kafka.annotation.KafkaListener;\n"
+                "@Service\n"
+                "public class OrderConsumer {\n"
+                '  @KafkaListener(topics = "orders", groupId = "order-group")\n'
+                "  public void handle(String msg) {}\n"
+                "}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            mq = a._extract_mq_info()
+            assert mq["type"] == "Kafka"
+            assert len(mq["topics"]) >= 1
+
+            order_topic = next(
+                (t for t in mq["topics"] if t["name"] == "orders"), None
+            )
+            assert order_topic is not None
+            assert order_topic["type"] == "consumer"
+            assert order_topic["group"] == "order-group"
+
+    def test_mq_kafka_producer_extraction(self):
+        """Detect KafkaTemplate.send() producers."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java" / "com" / "example"
+            src.mkdir(parents=True)
+            (repo / "pom.xml").write_text(
+                "<project>"
+                "<dependencies>"
+                "<dependency><artifactId>spring-kafka</artifactId></dependency>"
+                "</dependencies>"
+                "</project>"
+            )
+            (src / "OrderService.java").write_text(
+                "package com.example;\n"
+                "@Service\n"
+                "public class OrderService {\n"
+                "  public void send() {\n"
+                '    kafkaTemplate.send("orders", msg);\n'
+                "  }\n"
+                "}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            mq = a._extract_mq_info()
+            assert len(mq["topics"]) >= 1
+
+            producer = next(
+                (t for t in mq["topics"] if t["type"] == "producer"), None
+            )
+            assert producer is not None
+            assert producer["name"] == "orders"

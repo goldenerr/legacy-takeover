@@ -201,12 +201,21 @@ class JavaAnalyzer(LanguageAnalyzer):
                     elif a == "Entity":
                         is_spring = True
 
-                # Detect @RequestMapping / @Get/Put/Post/Delete/PatchMapping
-                for rm_match in _REQUEST_MAPPING_RE.finditer(text):
-                    endpoints.append({
-                        "method": self._guess_http_method(rm_match.group(0)),
-                        "path": rm_match.group(1),
-                    })
+                # Detect REST API endpoints with full details
+                # Only do deep extraction for @RestController files
+                if "RestController" in annotations or "@RestController" in text:
+                    endpoints = self._extract_rest_endpoints(text)
+                else:
+                    # Lightweight extraction for non-RestController files
+                    for rm_match in _REQUEST_MAPPING_RE.finditer(text):
+                        endpoints.append({
+                            "method": self._guess_http_method(rm_match.group(0)),
+                            "path": rm_match.group(1),
+                            "method_name": "",
+                            "return_type": "",
+                            "params": [],
+                            "path_vars": [],
+                        })
 
                 # Check for main() method
                 if re.search(
@@ -240,6 +249,7 @@ class JavaAnalyzer(LanguageAnalyzer):
                     "endpoints": endpoints,
                     "is_entry_point": is_entry,
                     "file_count": len(files),
+                    "role": self._infer_module_role(display, sorted(annotations)),
                 },
             )
             modules.append(pkg_module)
@@ -277,6 +287,60 @@ class JavaAnalyzer(LanguageAnalyzer):
             return "PATCH"
         return "REQUEST"
 
+    def _extract_rest_endpoints(self, class_content: str) -> list[dict]:
+        """Extract full REST API endpoints from a @RestController class content.
+
+        Returns list of dicts with keys: method, path, method_name, return_type,
+        params (list), path_vars (list).
+        """
+        endpoints: list[dict] = []
+        for method_match in re.finditer(
+            r'(@(?:Get|Post|Put|Delete|Patch|Request)Mapping)\s*\((.*?)\)\s*\n'
+            r'(?:\s*@\w+[^(]*\n)*\s*public\s+(\S+(?:<[^>]+>)?)\s+(\w+)\s*\(',
+            class_content, re.DOTALL,
+        ):
+            annotation = method_match.group(1)
+            params_str = method_match.group(2)
+            return_type = method_match.group(3)
+            method_name = method_match.group(4)
+
+            http_method = annotation.replace("@", "").replace("Mapping", "").upper()
+            if http_method == "REQUEST":
+                # Check method= attribute
+                m = re.search(r'method\s*=\s*RequestMethod\.(\w+)', params_str)
+                http_method = m.group(1) if m else "GET"
+
+            path_match = (
+                re.search(r'value\s*=\s*"([^"]+)"', params_str)
+                or re.search(r'path\s*=\s*"([^"]+)"', params_str)
+                or re.search(r'"([^"]+)"', params_str)
+            )
+            path = path_match.group(1) if path_match else "/"
+
+            endpoints.append({
+                "method": http_method,
+                "path": path,
+                "method_name": method_name,
+                "return_type": return_type,
+                "params": [],
+                "path_vars": [],
+            })
+
+        # Second pass: extract @RequestParam and @PathVariable for all methods
+        for ep in endpoints:
+            method_pos = class_content.find(f" {ep['method_name']}(")
+            if method_pos > 0:
+                # Look for @RequestParam annotations near this method
+                context = class_content[max(0, method_pos - 500):method_pos + 200]
+                ep["params"] = re.findall(
+                    r'@RequestParam\s*(?:\(.*?\))?\s*\S+\s+(\w+)', context,
+                )
+                ep["path_vars"] = re.findall(
+                    r'@PathVariable\s*(?:\(.*?\))?\s*\S+\s+(\w+)', context,
+                )
+
+        return endpoints
+
     def _detect_spring_build(self) -> bool:
         """Check build files for Spring Boot dependencies."""
         pom = self.repo_path / "pom.xml"
@@ -297,6 +361,28 @@ class JavaAnalyzer(LanguageAnalyzer):
                 except Exception:
                     pass
         return False
+
+    @staticmethod
+    def _infer_module_role(name: str, annotations: list[str]) -> str:
+        """Infer the architectural role of a module from its name and annotations."""
+        lower = name.lower()
+        if any(a.endswith("Controller") or a.endswith("RestController") for a in annotations):
+            return "REST_API_LAYER"
+        if "controller" in lower or "web" in lower:
+            return "REST_API_LAYER"
+        if "service" in lower or "biz" in lower or "business" in lower:
+            return "BUSINESS_LOGIC"
+        if "repository" in lower or "dao" in lower or "mapper" in lower:
+            return "DATA_ACCESS"
+        if "config" in lower or "configuration" in lower:
+            return "CONFIGURATION"
+        if "dto" in lower or "vo" in lower or "model" in lower or "entity" in lower:
+            return "DATA_TRANSFER"
+        if "util" in lower or "helper" in lower or "common" in lower:
+            return "UTILITY"
+        if "filter" in lower or "interceptor" in lower or "aspect" in lower:
+            return "CROSS_CUTTING"
+        return "UNKNOWN"
 
     # ── dependency extraction ───────────────────────────────────────────────
 
@@ -577,12 +663,142 @@ class JavaAnalyzer(LanguageAnalyzer):
                     description=f"JPA entity: {fp.stem}",
                 ))
 
+        # Gather DB config for summary enrichment
+        db_config = self._extract_db_config()
+        config_summary = ""
+        if db_config.get("type") != "unknown":
+            config_summary = f" ({db_config['type']} @ {', '.join(db_config['hosts'])})"
+        migration = db_config.get("migration", "")
+        if migration:
+            config_summary += f", migration={migration}"
+
         return ERDiagram(
             language="java",
             tables=tables,
             orm_framework=orm,
-            summary=f"{len(tables)} tables ({orm})",
+            summary=f"{len(tables)} tables ({orm}){config_summary}",
         )
+
+    def _extract_db_config(self) -> dict:
+        """Extract database connection configuration from application YAML files."""
+        config: dict = {"type": "unknown", "hosts": [], "databases": [], "pool": {}}
+        for yml in self.repo_path.rglob("application*.yml"):
+            try:
+                content = yml.read_text()
+                m = re.search(r'url:\s*jdbc:(\w+)://([^/\s]+)/(\w+)', content)
+                if m:
+                    config["type"] = m.group(1).upper()
+                    config["hosts"].append(m.group(2))
+                    config["databases"].append(m.group(3))
+                pm = re.search(r'minimum-idle:\s*(\d+)', content)
+                if pm:
+                    config["pool"]["min_idle"] = int(pm.group(1))
+                pm = re.search(r'maximum-pool-size:\s*(\d+)', content)
+                if pm:
+                    config["pool"]["max_size"] = int(pm.group(1))
+            except Exception:
+                pass
+
+        # Also check .properties files
+        for prop in self.repo_path.rglob("application*.properties"):
+            try:
+                content = prop.read_text()
+                m = re.search(r'jdbc:(\w+)://([^/\s]+)/(\w+)', content)
+                if m:
+                    config["type"] = m.group(1).upper()
+                    if m.group(2) not in config["hosts"]:
+                        config["hosts"].append(m.group(2))
+                    if m.group(3) not in config["databases"]:
+                        config["databases"].append(m.group(3))
+            except Exception:
+                pass
+
+        # Migration tool detection
+        if (self.repo_path / "src/main/resources/db/migration").exists():
+            config["migration"] = "Flyway"
+        elif list(self.repo_path.rglob("*changelog*.xml")):
+            config["migration"] = "Liquibase"
+
+        return config
+
+    def _extract_cache_info(self) -> dict:
+        """Detect cache framework and @Cacheable annotations."""
+        cache: dict = {"type": "unknown", "entries": []}
+        pom = self.repo_path / "pom.xml"
+        if pom.exists():
+            try:
+                content = pom.read_text()
+                if "spring-boot-starter-data-redis" in content:
+                    cache["type"] = "Redis"
+                if "redisson" in content:
+                    cache["type"] = "Redis (Redisson)"
+                if "caffeine" in content and "redis" not in cache["type"].lower():
+                    cache["type"] = "Caffeine"
+            except Exception:
+                pass
+        for f in self.repo_path.rglob("*.java"):
+            try:
+                content = f.read_text()
+                for m in re.finditer(
+                    r'@Cacheable\s*\((.*?)\)\s*\n', content, re.DOTALL,
+                ):
+                    params = m.group(1)
+                    cn = (
+                        re.search(r'(?:value|cacheNames)\s*=\s*"([^"]+)"', params)
+                        or re.search(r'"([^"]+)"', params)
+                    )
+                    key = re.search(r'key\s*=\s*"([^"]+)"', params)
+                    cache["entries"].append({
+                        "name": cn.group(1) if cn else "default",
+                        "key": key.group(1) if key else "auto",
+                        "file": str(f.relative_to(self.repo_path)),
+                    })
+            except Exception:
+                pass
+        return cache
+
+    def _extract_mq_info(self) -> dict:
+        """Detect message queue framework, topics/queues, and consumers/producers."""
+        mq: dict = {"type": "unknown", "topics": []}
+        pom = self.repo_path / "pom.xml"
+        if pom.exists():
+            try:
+                content = pom.read_text()
+                if "spring-kafka" in content:
+                    mq["type"] = "Kafka"
+                if "spring-boot-starter-amqp" in content:
+                    mq["type"] = "RabbitMQ"
+            except Exception:
+                pass
+        for f in self.repo_path.rglob("*.java"):
+            try:
+                content = f.read_text()
+                for m in re.finditer(
+                    r'@KafkaListener\s*\((.*?)\)', content, re.DOTALL,
+                ):
+                    params = m.group(1)
+                    topics = re.findall(r'topics\s*=\s*"([^"]+)"', params)
+                    if not topics:
+                        topics = re.findall(r'"([^"]+)"', params)
+                    group = re.search(r'groupId\s*=\s*"([^"]+)"', params)
+                    for t in topics:
+                        mq["topics"].append({
+                            "name": t,
+                            "type": "consumer",
+                            "group": group.group(1) if group else "default",
+                            "file": str(f.relative_to(self.repo_path)),
+                        })
+                for m in re.finditer(
+                    r'kafkaTemplate\.send\s*\(\s*"([^"]+)"', content,
+                ):
+                    mq["topics"].append({
+                        "name": m.group(1),
+                        "type": "producer",
+                        "file": str(f.relative_to(self.repo_path)),
+                    })
+            except Exception:
+                pass
+        return mq
 
     # ── risk assessment ─────────────────────────────────────────────────────
 
@@ -758,7 +974,7 @@ class JavaAnalyzer(LanguageAnalyzer):
         # 8. Hardcoded database passwords in config files
         for config_pattern in ("*.yml", "*.yaml", "*.properties"):
             for cf in self.repo_path.rglob(config_pattern):
-                if "/test/" in str(cf) or "\\test\\" in str(cf):
+                if "/test/" in str(cf) or "\\\\test\\\\" in str(cf):
                     continue
                 try:
                     ct = cf.read_text(encoding="utf-8", errors="ignore")
@@ -792,6 +1008,82 @@ class JavaAnalyzer(LanguageAnalyzer):
                         ))
                 except Exception:
                     pass
+
+        # 9. Layer violation checks (P1-4)
+        # Re-extract structure and dependencies to get module roles and edges
+        try:
+            mg = self.extract_structure()
+            dt = self.extract_dependencies()
+            modules = mg.modules
+            edges = dt.edges
+
+            for edge in edges:
+                from_mod = next((m for m in modules if m.name == edge.from_module), None)
+                to_mod = next((m for m in modules if m.name == edge.to_module), None)
+                if not from_mod or not to_mod:
+                    continue
+                from_role = from_mod.metadata.get("role", "")
+                to_role = to_mod.metadata.get("role", "")
+                if "API_LAYER" in from_role and "DATA_ACCESS" in to_role:
+                    rid += 1
+                    risks.append(Risk(
+                        id=f"JV-ARCH-{rid:03d}",
+                        category=RiskCategory.TECH_DEBT,
+                        severity=RiskSeverity.MEDIUM,
+                        confidence=0.8,
+                        title="Controller directly accesses Repository",
+                        description=(
+                            f"{edge.from_module} → {edge.to_module}: "
+                            "Controller should go through Service"
+                        ),
+                        file=edge.detail,
+                        recommendation="Introduce a Service layer method.",
+                    ))
+
+            # 10. Circular dependency detection (P1-5)
+            graph: dict[str, set[str]] = {m.name: set() for m in modules}
+            for e in edges:
+                if e.from_module in graph and e.to_module in graph:
+                    graph[e.from_module].add(e.to_module)
+
+            visited: set[str] = set()
+            stack: set[str] = set()
+            path: list[str] = []
+            cycles: list[list[str]] = []
+
+            def dfs(n: str) -> None:
+                visited.add(n)
+                stack.add(n)
+                path.append(n)
+                for nb in graph.get(n, set()):
+                    if nb not in visited:
+                        dfs(nb)
+                    elif nb in stack:
+                        idx = path.index(nb)
+                        cycles.append(path[idx:])
+                path.pop()
+                stack.discard(n)
+
+            for n in graph:
+                if n not in visited:
+                    dfs(n)
+
+            for cycle in cycles:
+                if len(cycle) >= 2:
+                    rid += 1
+                    risks.append(Risk(
+                        id=f"JV-CIRC-{rid:03d}",
+                        category=RiskCategory.TECH_DEBT,
+                        severity=RiskSeverity.HIGH,
+                        confidence=0.9,
+                        title=f"Circular dependency: {' → '.join(cycle)}",
+                        description="Modules form a dependency cycle",
+                        recommendation=(
+                            "Extract shared interface or use dependency inversion."
+                        ),
+                    ))
+        except Exception:
+            pass
 
         return risks
 
