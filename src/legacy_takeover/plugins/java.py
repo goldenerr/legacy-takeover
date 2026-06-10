@@ -20,6 +20,11 @@ from legacy_takeover.plugins.base import (
 )
 from legacy_takeover.plugins.security_scanner import scan_vulnerabilities
 from legacy_takeover.plugins.cve_checker import check_cves
+from legacy_takeover.plugins.code_quality import (
+    compute_stats, find_god_classes, find_long_methods as cq_find_long_methods,
+    cyclomatic_complexity,
+)
+from legacy_takeover.plugins.test_analyzer import analyze_tests, find_untested_critical
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -162,6 +167,9 @@ class JavaAnalyzer(LanguageAnalyzer):
         packages = self._collect_java_files()
         modules: list[Module] = []
 
+        # Phase 3: compute top-level code stats
+        code_stats = compute_stats(self.repo_path)
+
         is_spring = False
         total_classes = 0
         controller_count = 0
@@ -278,12 +286,19 @@ class JavaAnalyzer(LanguageAnalyzer):
             modules[0].metadata["business_domains"] = self._infer_business_domains()
             modules[0].metadata["observability"] = self._extract_observability()
             modules[0].metadata["config_files"] = self._extract_config_files()
-            # Call chain tracing needs edges from dependency extraction
+            modules[0].metadata["code_stats"] = code_stats
+            # Call chain tracing and data flow tracing
             try:
                 dt = self.extract_dependencies()
                 modules[0].metadata["call_chains"] = self._trace_call_chains(modules, dt.edges)
+                # Phase 3: data flow tracing from endpoints
+                all_endpoints = []
+                for m in modules:
+                    all_endpoints.extend(m.metadata.get("endpoints", []))
+                modules[0].metadata["data_flows"] = self._trace_request_flow(all_endpoints, dt.edges)
             except Exception:
                 modules[0].metadata["call_chains"] = []
+                modules[0].metadata["data_flows"] = []
 
         return ModuleGraph(
             language="java", root=root, modules=modules, summary=summary,
@@ -903,6 +918,78 @@ class JavaAnalyzer(LanguageAnalyzer):
                     chains.append(chain)
         return chains[:10]
 
+    def _trace_request_flow(self, endpoints: list[dict], edges) -> list[dict]:
+        """Trace data flow from HTTP endpoints through internal modules.
+
+        Args:
+            endpoints: List of endpoint dicts (method, path, controller_module, etc.)
+            edges: List of Dependency objects from extract_dependencies()
+
+        Returns:
+            List of flow dicts with endpoint info and trace steps.
+        """
+        # Build module lookup from collected packages
+        packages = self._collect_java_files()
+        module_lookup: dict[str, dict] = {}
+        for pkg, files in packages.items():
+            for fp in files:
+                text = self._read_file_safe(fp)
+                if text:
+                    annotations = set()
+                    for am in _ANNOTATION_RE.finditer(text):
+                        annotations.add(am.group(1))
+                    module_lookup[pkg] = {
+                        "name": pkg,
+                        "annotations": annotations,
+                    }
+
+        flows: list[dict] = []
+        for ep in endpoints[:5]:  # top 5 endpoints
+            flow: dict = {
+                "endpoint": f"{ep['method']} {ep['path']}",
+                "controller": ep.get("controller", ""),
+                "steps": [
+                    {
+                        "step": 1,
+                        "action": f"HTTP {ep['method']} {ep['path']}",
+                        "layer": "CLIENT",
+                    }
+                ],
+            }
+
+            # Find the controller module
+            ctrl_module_name = ep.get("controller_module", "")
+            if not ctrl_module_name:
+                # Try to match by package name containing 'controller'
+                for pkg_name in module_lookup:
+                    if "controller" in pkg_name.lower():
+                        ctrl_module_name = pkg_name
+                        break
+
+            if ctrl_module_name and ctrl_module_name in module_lookup:
+                flow["steps"].append({
+                    "step": 2,
+                    "action": f"{ctrl_module_name}.{ep.get('method_name', 'handler')}()",
+                    "layer": "CONTROLLER",
+                })
+
+                # Find outgoing edges from this controller
+                out_edges = [
+                    e for e in edges if e.from_module == ctrl_module_name
+                ]
+                step = 3
+                for e in out_edges[:3]:
+                    flow["steps"].append({
+                        "step": step,
+                        "action": f"{e.to_module} ({e.type.value})",
+                        "layer": e.type.value.upper(),
+                    })
+                    step += 1
+
+            flows.append(flow)
+
+        return flows
+
     # ── observability ────────────────────────────────────────────────────────
 
     def _extract_observability(self) -> dict:
@@ -1010,37 +1097,11 @@ class JavaAnalyzer(LanguageAnalyzer):
                     recommendation="Migrate to the recommended replacement API.",
                 ))
 
-            # 4. God class (>500 lines)
-            if len(lines) > 500:
-                rid += 1
-                risks.append(Risk(
-                    id=f"JV-DEBT-{rid:03d}",
-                    category=RiskCategory.TECH_DEBT,
-                    severity=RiskSeverity.MEDIUM,
-                    confidence=0.9,
-                    title=f"God class ({len(lines)} lines)",
-                    description=f"{rp} has {len(lines)} lines — exceeds 500-line threshold",
-                    file=rp, line=1,
-                    evidence=f"File is {len(lines)} lines",
-                    recommendation="Refactor into smaller, focused classes.",
-                ))
+            # 4. God class (>500 lines) — Phase 3: use centralized code_quality
+            # (Moved to after the per-file loop for repo-wide analysis)
 
-            # 5. Long methods (>50 lines)
-            long_methods = self._find_long_methods(text, lines)
-            for m_name, m_start, m_len in long_methods:
-                if m_len > 50:
-                    rid += 1
-                    risks.append(Risk(
-                        id=f"JV-DEBT-{rid:03d}",
-                        category=RiskCategory.TECH_DEBT,
-                        severity=RiskSeverity.LOW,
-                        confidence=0.8,
-                        title=f"Long method {m_name}() ({m_len} lines)",
-                        description=f"Method {m_name}() in {rp} has {m_len} lines — exceeds 50-line threshold",
-                        file=rp, line=m_start,
-                        evidence=f"Method body: {m_len} lines",
-                        recommendation=f"Extract sub-methods from {m_name}().",
-                    ))
+            # 5. Long methods (>50 lines) — Phase 3: use centralized code_quality
+            # (Moved to after the per-file loop for repo-wide analysis)
 
         # 6. Classes without tests (check once per package)
         test_root = None
@@ -1278,6 +1339,64 @@ class JavaAnalyzer(LanguageAnalyzer):
             pass
         try:
             risks.extend(check_cves(self.repo_path))
+        except Exception:
+            pass
+
+        # ── Phase 3: centralized code quality checks ─────────────────────────
+
+        # God class risks (P3-3)
+        god_classes = find_god_classes(self.repo_path)
+        for gc in god_classes:
+            rid += 1
+            risks.append(Risk(
+                id=f"JV-GOD-{rid:03d}",
+                category=RiskCategory.TECH_DEBT,
+                severity=RiskSeverity.HIGH if gc["loc"] > 1000 else RiskSeverity.MEDIUM,
+                confidence=0.85,
+                title=f"God class: {gc['file']} ({gc['loc']} lines)",
+                description=f"Single class exceeds recommended size of 500 lines",
+                file=gc["file"],
+                recommendation="Split by responsibility into smaller, focused classes.",
+            ))
+
+        # Long method risks (P3-3)
+        long_methods = cq_find_long_methods(self.repo_path)
+        for lm in long_methods:
+            rid += 1
+            risks.append(Risk(
+                id=f"JV-DEBT-{rid:03d}",
+                category=RiskCategory.TECH_DEBT,
+                severity=RiskSeverity.LOW,
+                confidence=0.8,
+                title=f"Long method {lm['method']}() ({lm['loc']} lines)",
+                description=(
+                    f"Method {lm['method']}() in {lm['file']} has {lm['loc']} lines "
+                    f"— exceeds 50-line threshold"
+                ),
+                file=lm["file"],
+                line=lm["line"],
+                evidence=f"Method body: {lm['loc']} lines",
+                recommendation=f"Extract sub-methods from {lm['method']}().",
+            ))
+
+        # Test coverage analysis (P3-5, P3-6)
+        try:
+            test_analysis = analyze_tests(self.repo_path)
+            # Collect all endpoints for untested critical path detection
+            try:
+                mg = self.extract_structure()
+                all_eps = []
+                for m in mg.modules:
+                    all_eps.extend(m.metadata.get("endpoints", []))
+            except Exception:
+                all_eps = []
+
+            untested_critical = find_untested_critical(test_analysis, all_eps)
+            for r in untested_critical:
+                # Re-id to avoid conflicts
+                rid += 1
+                r.id = f"JV-TEST-{rid:03d}"
+                risks.append(r)
         except Exception:
             pass
 
