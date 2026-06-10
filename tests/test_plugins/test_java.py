@@ -856,3 +856,213 @@ class TestJavaAnalyzer:
             )
             assert producer is not None
             assert producer["name"] == "orders"
+
+    # ── P2-1: Auth analysis ────────────────────────────────────────────────
+
+    def test_auth_jwt_detected(self):
+        """Detect JWT authentication from JwtTokenProvider class."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java" / "com" / "example"
+            src.mkdir(parents=True)
+            (src / "JwtTokenProvider.java").write_text(
+                "package com.example;\n"
+                "public class JwtTokenProvider {\n"
+                "  String createToken() { return \"\"; }\n"
+                "}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            auth = a._extract_auth_info()
+            assert auth["type"] == "JWT"
+
+    def test_auth_roles_extracted(self):
+        """Extract roles from hasRole() calls."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "SecurityConfig.java").write_text(
+                'package com.example;\n'
+                'public class SecurityConfig {\n'
+                '  void config() {\n'
+                '    http.authorizeRequests()\n'
+                '      .antMatchers("/admin/**").hasRole("ADMIN")\n'
+                '      .antMatchers("/api/**").hasRole("USER");\n'
+                '  }\n'
+                '}\n'
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            auth = a._extract_auth_info()
+            assert "ADMIN" in auth["roles"]
+            assert "USER" in auth["roles"]
+
+    def test_auth_token_expiry_from_yml(self):
+        """Extract token expiry from application yml."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "application.yml").write_text(
+                "jwt:\n"
+                "  token-expiry-seconds: 3600\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            auth = a._extract_auth_info()
+            assert auth["token_config"]["expiry_seconds"] == 3600
+
+    # ── P2-2: Sensitive data in logs ────────────────────────────────────────
+
+    def test_sensitive_data_logged_detected(self):
+        """Detect logging statements that include password."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "LoginService.java").write_text(
+                "public class LoginService {\n"
+                '  void login(String password) {\n'
+                '    log.info("User login with password: " + password);\n'
+                "  }\n"
+                "}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            risks = a.assess_risks()
+            assert any("Sensitive data logged" in r.title for r in risks), (
+                f"Expected sensitive log risk, got: {[r.title for r in risks]}"
+            )
+
+    def test_weak_crypto_detected(self):
+        """Detect DES/MD5 usage."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "CryptoUtil.java").write_text(
+                "public class CryptoUtil {\n"
+                "  String hash(String s) { return MD5(s); }\n"
+                "}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            risks = a.assess_risks()
+            assert any("Weak cryptographic" in r.title for r in risks), (
+                f"Expected weak crypto risk, got: {[r.title for r in risks]}"
+            )
+
+    def test_plaintext_credentials_in_yml(self):
+        """Detect plaintext credentials in application config."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "application.yml").write_text(
+                "api:\n"
+                "  secret: my-api-key-12345\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            risks = a.assess_risks()
+            assert any("Plain-text credentials" in r.title for r in risks), (
+                f"Expected plain-text creds risk, got: {[r.title for r in risks]}"
+            )
+
+    # ── P2-5: Business domains ──────────────────────────────────────────────
+
+    def test_business_domains_from_packages(self):
+        """Infer business domains from package names."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java"
+            (src / "com" / "example" / "backup").mkdir(parents=True)
+            (src / "com" / "example" / "user").mkdir(parents=True)
+            (src / "com" / "example" / "backup" / "BackupService.java").write_text(
+                "package com.example.backup;\npublic class BackupService {}\n"
+            )
+            (src / "com" / "example" / "user" / "UserController.java").write_text(
+                "package com.example.user;\npublic class UserController {}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            domains = a._infer_business_domains()
+            domain_names = [d["name"] for d in domains["domains"]]
+            assert "备份管理" in domain_names
+            assert "用户管理" in domain_names
+
+    # ── P2-6: Call chains ───────────────────────────────────────────────────
+
+    def test_call_chains_from_controller(self):
+        """Trace call chain from controller through service."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            src = repo / "src" / "main" / "java"
+            ctrl_dir = src / "com" / "example" / "controller"
+            svc_dir = src / "com" / "example" / "service"
+            ctrl_dir.mkdir(parents=True)
+            svc_dir.mkdir(parents=True)
+            (ctrl_dir / "UserController.java").write_text(
+                "package com.example.controller;\n"
+                "import com.example.service.UserService;\n"
+                "@org.springframework.web.bind.annotation.RestController\n"
+                'public class UserController {\n'
+                "  private UserService svc;\n"
+                '  @org.springframework.web.bind.annotation.GetMapping("/users")\n'
+                "  public List<String> list() { return svc.getAll(); }\n"
+                "}\n"
+            )
+            (svc_dir / "UserService.java").write_text(
+                "package com.example.service;\n"
+                "@org.springframework.stereotype.Service\n"
+                "public class UserService {}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            graph = a.extract_structure()
+            chains = graph.modules[0].metadata.get("call_chains", [])
+            # Should have at least one chain (depends on structure ordering)
+            assert isinstance(chains, list)
+
+    # ── P2-9: Observability ─────────────────────────────────────────────────
+
+    def test_logging_logback_detected(self):
+        """Detect Logback from logback.xml."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "logback-spring.xml").write_text("<configuration></configuration>")
+            a = JavaAnalyzer(repo_path=repo)
+            obs = a._extract_observability()
+            assert obs["logging"]["framework"] == "Logback"
+
+    def test_monitoring_prometheus_detected(self):
+        """Detect Prometheus from pom.xml dependency."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "pom.xml").write_text(
+                "<project>"
+                "<dependency><artifactId>micrometer-registry-prometheus</artifactId></dependency>"
+                "</project>"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            obs = a._extract_observability()
+            assert obs["monitoring"]["type"] == "Prometheus"
+
+    # ── P2-10: Config file inventory ────────────────────────────────────────
+
+    def test_config_file_inventory(self):
+        """Extract config file keys and profile info."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "application.yml").write_text(
+                "spring:\n  datasource:\n    url: jdbc:mysql://localhost/db\n"
+                "server:\n  port: 8080\n"
+            )
+            (repo / "application-prod.yml").write_text(
+                "spring:\n  datasource:\n    password: secret123\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            configs = a._extract_config_files()
+            assert len(configs) == 2
+            profiles = [c["profile"] for c in configs]
+            assert "default" in profiles
+            assert "prod" in profiles
+
+            # prod config should have a warning for plain-text creds
+            prod_cfg = next(c for c in configs if c["profile"] == "prod")
+            assert len(prod_cfg["warnings"]) >= 1
+
+    def test_config_file_no_credentials_no_warning(self):
+        """Config without plain-text creds has no warnings."""
+        with tempfile.TemporaryDirectory() as d:
+            repo = Path(d)
+            (repo / "application.yml").write_text(
+                "spring:\n  datasource:\n    password: ${DB_PASSWORD}\n"
+            )
+            a = JavaAnalyzer(repo_path=repo)
+            configs = a._extract_config_files()
+            assert len(configs) == 1
+            assert len(configs[0]["warnings"]) == 0

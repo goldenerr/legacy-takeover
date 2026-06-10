@@ -18,6 +18,8 @@ from legacy_takeover.plugins.base import (
     Dependency, DependencyTree, DependencyType,
     Table, Column, ERDiagram, Risk, RiskCategory, RiskSeverity,
 )
+from legacy_takeover.plugins.security_scanner import scan_vulnerabilities
+from legacy_takeover.plugins.cve_checker import check_cves
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -269,6 +271,19 @@ class JavaAnalyzer(LanguageAnalyzer):
                 parts.append("— " + ", ".join(detail_parts))
         parts.append(f"{len(modules)} packages, {total_classes} classes")
         summary = " ".join(parts)
+
+        # Phase 2: enriched metadata — store in first module
+        if modules:
+            modules[0].metadata["auth"] = self._extract_auth_info()
+            modules[0].metadata["business_domains"] = self._infer_business_domains()
+            modules[0].metadata["observability"] = self._extract_observability()
+            modules[0].metadata["config_files"] = self._extract_config_files()
+            # Call chain tracing needs edges from dependency extraction
+            try:
+                dt = self.extract_dependencies()
+                modules[0].metadata["call_chains"] = self._trace_call_chains(modules, dt.edges)
+            except Exception:
+                modules[0].metadata["call_chains"] = []
 
         return ModuleGraph(
             language="java", root=root, modules=modules, summary=summary,
@@ -800,6 +815,137 @@ class JavaAnalyzer(LanguageAnalyzer):
                 pass
         return mq
 
+    # ── auth info ───────────────────────────────────────────────────────────
+
+    def _extract_auth_info(self) -> dict:
+        """Detect authentication framework and roles."""
+        auth: dict = {"type": "unknown", "roles": [], "token_config": {}}
+        for f in self.repo_path.rglob("*.java"):
+            try:
+                content = f.read_text()
+                if "JwtTokenProvider" in content or "JwtUtils" in content or ".jjwt." in content:
+                    auth["type"] = "JWT"
+                if "@EnableOAuth2Sso" in content or "spring-security-oauth2" in content:
+                    auth["type"] = "OAuth2" if auth["type"] == "unknown" else auth["type"] + "+OAuth2"
+                if "httpBasic()" in content:
+                    auth["type"] = "Basic Auth" if auth["type"] == "unknown" else auth["type"] + "+Basic"
+                for m in re.finditer(r'hasRole\("(\w+)"\)', content):
+                    role = m.group(1)
+                    if role not in auth["roles"]:
+                        auth["roles"].append(role)
+                for m in re.finditer(r'hasAuthority\("(\w+)"\)', content):
+                    auth["roles"].append(m.group(1))
+            except Exception:
+                pass
+        for yml in self.repo_path.rglob("application*.yml"):
+            try:
+                content = yml.read_text()
+                exp = re.search(r'(?:token.*expir|jwt.*expir).*?(\d+)', content, re.IGNORECASE)
+                if exp:
+                    auth["token_config"]["expiry_seconds"] = int(exp.group(1))
+            except Exception:
+                pass
+        return auth
+
+    # ── business domains ─────────────────────────────────────────────────────
+
+    def _infer_business_domains(self) -> dict:
+        """Infer business domains from package names."""
+        domains: dict = {}
+        keywords = {
+            "备份管理": ["backup", "snapshot", "recovery", "restore"],
+            "客户端管理": ["client", "agent", "endpoint", "host"],
+            "用户管理": ["user", "account", "auth", "login", "profile"],
+            "任务调度": ["task", "schedule", "job", "cron", "trigger"],
+            "通知告警": ["notification", "alert", "alarm", "message"],
+            "数据统计": ["stat", "report", "dashboard", "usage", "counter"],
+            "配置管理": ["config", "setting", "property", "preference"],
+            "日志审计": ["log", "audit", "trace", "history"],
+        }
+        for f in self.repo_path.rglob("*.java"):
+            try:
+                text = f.read_text()
+                pkg_match = re.search(r'package\s+([\w.]+);', text)
+                if pkg_match:
+                    pkg_name = pkg_match.group(1).lower()
+                    for domain, terms in keywords.items():
+                        if any(t in pkg_name for t in terms):
+                            if domain not in domains:
+                                domains[domain] = {"packages": [], "entities": []}
+                            if pkg_match.group(1) not in domains[domain]["packages"]:
+                                domains[domain]["packages"].append(pkg_match.group(1))
+            except Exception:
+                pass
+        return {"domains": [{"name": k, **v} for k, v in domains.items()]}
+
+    # ── call chain tracing ───────────────────────────────────────────────────
+
+    def _trace_call_chains(self, modules, edges) -> list[dict]:
+        """Trace API call chains from controllers through services."""
+        chains: list[dict] = []
+        controllers = [m for m in modules if "API_LAYER" in m.metadata.get("role", "")]
+        for ctrl in controllers:
+            for ep in ctrl.metadata.get("endpoints", [])[:3]:  # top 3 per controller
+                chain = {"endpoint": f"{ep['method']} {ep['path']}", "steps": [f"1. {ctrl.name}.{ep['method_name']}()"]}
+                step_num = 2
+                current = ctrl.name
+                visited: set[str] = {current}
+                for _ in range(5):  # max depth
+                    next_edges = [e for e in edges if e.from_module == current and e.to_module not in visited]
+                    if not next_edges:
+                        break
+                    for e in next_edges[:2]:
+                        visited.add(e.to_module)
+                        chain["steps"].append(f"{step_num}. {e.to_module} ({e.type.value})")
+                        step_num += 1
+                        current = e.to_module
+                if len(chain["steps"]) > 1:
+                    chains.append(chain)
+        return chains[:10]
+
+    # ── observability ────────────────────────────────────────────────────────
+
+    def _extract_observability(self) -> dict:
+        """Detect logging and monitoring framework."""
+        obs: dict = {"logging": {"framework": "unknown"}, "monitoring": {"type": "unknown"}}
+        if list(self.repo_path.rglob("logback*.xml")):
+            obs["logging"]["framework"] = "Logback"
+        if list(self.repo_path.rglob("log4j2*.xml")):
+            obs["logging"]["framework"] = "Log4j2"
+        pom = self.repo_path / "pom.xml"
+        if pom.exists():
+            c = pom.read_text()
+            if "micrometer-registry-prometheus" in c:
+                obs["monitoring"]["type"] = "Prometheus"
+            if "skywalking" in c:
+                obs["monitoring"]["type"] = "SkyWalking"
+        for yml in self.repo_path.rglob("application*.yml"):
+            try:
+                m = re.search(r'management\.(?:server\.)?port:\s*(\d+)', yml.read_text())
+                if m:
+                    obs["monitoring"]["port"] = int(m.group(1))
+            except Exception:
+                pass
+        return obs
+
+    # ── config inventory ─────────────────────────────────────────────────────
+
+    def _extract_config_files(self) -> list[dict]:
+        """Inventory application config files with keys and warnings."""
+        configs: list[dict] = []
+        for f in self.repo_path.rglob("application*.yml"):
+            try:
+                content = f.read_text()
+                profile = f.stem.replace("application-", "") if "application-" in f.stem else "default"
+                keys = re.findall(r'^(\w[\w.]*):', content, re.MULTILINE)[:20]
+                warnings: list[str] = []
+                if re.search(r'(?:password|secret|key):\s*[^$\n]{3,}', content, re.IGNORECASE) and "${" not in content:
+                    warnings.append("Contains plain-text credentials")
+                configs.append({"file": str(f.relative_to(self.repo_path)), "profile": profile, "keys": keys, "warnings": warnings})
+            except Exception:
+                pass
+        return configs
+
     # ── risk assessment ─────────────────────────────────────────────────────
 
     def assess_risks(self) -> list[Risk]:
@@ -1009,6 +1155,46 @@ class JavaAnalyzer(LanguageAnalyzer):
                 except Exception:
                     pass
 
+        # P2-2: Sensitive data detection — log statements leaking secrets
+        for f in self.repo_path.rglob("*.java"):
+            try:
+                content = f.read_text(); rp = str(f.relative_to(self.repo_path))
+                # Logging sensitive fields without masking
+                sensitive_in_log = re.findall(r'log\.\w+\(.*\+\s*(password|secret|token|key|ssn|credit)', content, re.IGNORECASE)
+                if sensitive_in_log:
+                    rid += 1
+                    risks.append(Risk(id=f"JV-SENS-{rid:03d}", category=RiskCategory.SECURITY,
+                        severity=RiskSeverity.HIGH, confidence=0.8,
+                        title="Sensitive data logged without masking",
+                        description=f"Log statement in {rp} includes {sensitive_in_log[0]}",
+                        file=rp, recommendation="Mask sensitive fields before logging."))
+
+                # Weak crypto
+                if "DES" in content or "MD5" in content:
+                    rid += 1
+                    risks.append(Risk(id=f"JV-CRYP-{rid:03d}", category=RiskCategory.SECURITY,
+                        severity=RiskSeverity.HIGH, confidence=0.9,
+                        title="Weak cryptographic algorithm",
+                        description=f"DES/MD5 usage in {rp}",
+                        file=rp, recommendation="Use AES-256 or SHA-256 instead."))
+            except Exception:
+                pass
+
+        # P2-2: Check config files for plaintext secrets
+        for yml in self.repo_path.rglob("application*.yml"):
+            try:
+                content = yml.read_text(); rp = str(yml.relative_to(self.repo_path))
+                if re.search(r'(?:password|secret|api-key|token):\s*\S+', content, re.IGNORECASE):
+                    if "${" not in content.split("password")[1][:50] if "password" in content else True:
+                        rid += 1
+                        risks.append(Risk(id=f"JV-CONF-{rid:03d}", category=RiskCategory.SECURITY,
+                            severity=RiskSeverity.CRITICAL, confidence=0.95,
+                            title="Plain-text credentials in config",
+                            description=f"Configuration file {rp} contains hardcoded credentials",
+                            file=rp, recommendation="Use environment variables or a secrets vault."))
+            except Exception:
+                pass
+
         # 9. Layer violation checks (P1-4)
         # Re-extract structure and dependencies to get module roles and edges
         try:
@@ -1082,6 +1268,16 @@ class JavaAnalyzer(LanguageAnalyzer):
                             "Extract shared interface or use dependency inversion."
                         ),
                     ))
+        except Exception:
+            pass
+
+        # P2-3/P2-4: Vulnerability scanner and CVE checker
+        try:
+            risks.extend(scan_vulnerabilities(self.repo_path))
+        except Exception:
+            pass
+        try:
+            risks.extend(check_cves(self.repo_path))
         except Exception:
             pass
 
