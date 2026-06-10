@@ -53,6 +53,8 @@ def _build_context(result: ScanResult, repo_url: str) -> dict:
         "total_deps": result.total_dependencies, "total_tables": result.total_tables,
         "total_risks": result.total_risks, "external_deps": result.external_deps,
         "has_dep_edges": has_dep_edges,
+        "system_context": result.system_context,
+        "system_purpose": result.system_purpose,
     }
 
 def _build_architecture_mermaid(result: ScanResult) -> str:

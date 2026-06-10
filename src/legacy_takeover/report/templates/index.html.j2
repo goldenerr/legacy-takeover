@@ -26,6 +26,8 @@ th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border)}
 th{color:#8b949e;font-weight:500;text-transform:uppercase;font-size:.75em;letter-spacing:.05em}
 .sev-critical{color:var(--red);font-weight:700}.sev-high{color:var(--orange);font-weight:700}
 .sev-medium{color:#d2991d}.sev-low{color:var(--green)}.sev-info{color:#8b949e}
+.purpose-box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px}
+.purpose-box h3{color:var(--accent);margin-bottom:8px}
 </style>
 </head>
 <body>
@@ -42,14 +44,49 @@ th{color:#8b949e;font-weight:500;text-transform:uppercase;font-size:.75em;letter
 </div>
 
 <div class="tabs">
-<div class="tab active" onclick="switchTab(event,'overview')">Overview</div>
+<div class="tab active" onclick="switchTab(event,'purpose')">What is this?</div>
+<div class="tab" onclick="switchTab(event,'overview')">Overview</div>
 <div class="tab" onclick="switchTab(event,'architecture')">Architecture</div>
 <div class="tab" onclick="switchTab(event,'database')">Database</div>
 <div class="tab" onclick="switchTab(event,'dependencies')">Dependencies</div>
 <div class="tab" onclick="switchTab(event,'risks')">Risks</div>
 </div>
 
-<div id="overview" class="tab-content active">
+<div id="purpose" class="tab-content active">
+<h2>🎯 What is this system?</h2>
+<div class="purpose-box">
+{% if system_context.purpose %}
+<p>{{ system_context.purpose }}</p>
+{% else %}
+<p><em>No description available. Add a README.md for better results.</em></p>
+{% endif %}
+</div>
+
+{% if system_context.readme_summary %}
+<h3>README Summary</h3>
+<blockquote>{{ system_context.readme_summary }}</blockquote>
+{% endif %}
+
+{% if system_context.entry_points %}
+<h3>Entry Points</h3>
+<ul>
+{% for ep in system_context.entry_points %}
+<li><code>{{ ep }}</code></li>
+{% endfor %}
+</ul>
+{% endif %}
+
+{% if system_context.config_files %}
+<h3>Configuration Files</h3>
+<ul>
+{% for cf in system_context.config_files %}
+<li><code>{{ cf }}</code></li>
+{% endfor %}
+</ul>
+{% endif %}
+</div>
+
+<div id="overview" class="tab-content">
 <h2>Languages</h2>
 <p>{{ languages | join(", ") or "none detected" }}</p>
 <h3>External Dependencies ({{ external_deps | length }})</h3>
@@ -62,6 +99,17 @@ th{color:#8b949e;font-weight:500;text-transform:uppercase;font-size:.75em;letter
 <h3>{{ mg.language | title }} — {{ mg.summary }}</h3>
 <table><tr><th>Module</th><th>Type</th><th>Path</th></tr>
 {% for m in mg.modules %}<tr><td>{{ m.name }}</td><td>{{ m.type.value }}</td><td><code>{{ m.path }}</code></td></tr>{% endfor %}</table>
+
+{% if system_context.api_endpoints %}
+<h4>API Endpoints</h4>
+<table>
+<tr><th>Module</th><th>Method</th><th>Path</th></tr>
+{% for ep in system_context.api_endpoints %}
+<tr><td>{{ ep.module }}</td><td>{{ ep.get("method", "?") }}</td><td><code>{{ ep.get("path", ep.get("route", "?")) }}</code></td></tr>
+{% endfor %}
+</table>
+{% endif %}
+
 <div class="mermaid">graph TD
 {% for m in mg.modules %}{{ m.name.replace('-','_').replace('.','_') }}[{{ m.name }}]
 {% endfor %}</div>
@@ -82,9 +130,13 @@ th{color:#8b949e;font-weight:500;text-transform:uppercase;font-size:.75em;letter
 
 <div id="dependencies" class="tab-content">
 <h2>Dependencies</h2>
+{% if has_dep_edges %}
 <div class="mermaid">graph LR
 {% for dt in dependency_trees %}{% for e in dt.edges %}{{ e.from_module.replace('-','_').replace('.','_') }} -->|{{ e.type.value }}| {{ e.to_module.replace('-','_').replace('.','_') }}
 {% endfor %}{% endfor %}</div>
+{% else %}
+<p><em>No internal dependency analysis available. This happens when imports between modules couldn't be resolved.</em></p>
+{% endif %}
 </div>
 
 <div id="risks" class="tab-content">

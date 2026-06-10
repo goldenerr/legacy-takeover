@@ -21,8 +21,16 @@ class ScanResult:
     dependency_trees: list[DependencyTree] = field(default_factory=list)
     er_diagrams: list[ERDiagram] = field(default_factory=list)
     all_risks: list[Risk] = field(default_factory=list)
+    system_context: dict = field(default_factory=dict)
+    # Populated by engine.py after all plugins run.
+    # Keys: "purpose", "entry_points", "config_files", "readme_summary", "api_endpoints"
 
     # ── Derived properties ──────────────────────────────────────────────────
+
+    @property
+    def system_purpose(self) -> str:
+        """Human-readable summary of what the system does."""
+        return self.system_context.get("purpose", "")
 
     @property
     def languages(self) -> list[str]:
@@ -89,6 +97,7 @@ def aggregate_results(
     repo_url: str,
     plugins_data: list[tuple[ModuleGraph, DependencyTree, ERDiagram, list[Risk]]],
     depth: str = "standard",
+    system_context: dict | None = None,
 ) -> ScanResult:
     """Combine per-plugin outputs into a single ScanResult.
 
@@ -98,11 +107,18 @@ def aggregate_results(
         plugins_data: List of (module_graph, dependency_tree, er_diagram, risks)
                       tuples — one per plugin that ran.
         depth: Scan depth tier (quick, standard, deep).
+        system_context: Optional dict with system-level context (purpose,
+                        entry_points, config_files, readme_summary, api_endpoints).
 
     Returns:
         Populated ScanResult aggregating all plugin outputs.
     """
-    result = ScanResult(repo_name=repo_name, repo_url=repo_url, depth=depth)
+    result = ScanResult(
+        repo_name=repo_name,
+        repo_url=repo_url,
+        depth=depth,
+        system_context=system_context or {},
+    )
     for mg, dt, ed, risks in plugins_data:
         result.module_graphs.append(mg)
         result.dependency_trees.append(dt)

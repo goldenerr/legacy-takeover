@@ -123,6 +123,9 @@ class TestRunScan:
         assert "python" in result.languages
         assert result.total_modules == 1
         assert result.total_risks == 1
+        # system_context should be populated (at minimum with a purpose).
+        assert "purpose" in result.system_context
+        assert isinstance(result.system_purpose, str)
 
     def test_scan_returns_repo_name_from_url(self, sample_repo):
         from legacy_takeover.core.engine import run_scan

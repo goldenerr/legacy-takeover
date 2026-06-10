@@ -8,6 +8,7 @@
 
 ## Dependency Graph
 
+{% if has_dep_edges %}
 ```mermaid
 graph LR
 {% for dt in dependency_trees %}
@@ -15,7 +16,7 @@ graph LR
     {{ edge.from_module.replace('-','_').replace('.','_') }} -->|{{ edge.type.value }}| {{ edge.to_module.replace('-','_').replace('.','_') }}
 {% endfor %}
 {% endfor %}
-{% if not has_dep_edges %}
-    A["No dependencies detected"]
-{% endif %}
 ```
+{% else %}
+_No internal dependency analysis available. This happens when imports between modules couldn't be resolved._
+{% endif %}

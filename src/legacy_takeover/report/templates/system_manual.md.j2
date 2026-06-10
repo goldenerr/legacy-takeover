@@ -2,6 +2,41 @@
 
 **Generated:** {{ generated_at }} | **Depth:** {{ depth }} | **URL:** {{ repo_url }}
 
+## 🎯 What is this system?
+
+{% if system_context.purpose %}
+{{ system_context.purpose }}
+{% else %}
+_No description available. Add a README.md for better results._
+{% endif %}
+
+{% if system_context.readme_summary %}
+> **README Summary:** {{ system_context.readme_summary }}
+{% endif %}
+
+{% if system_context.entry_points %}
+### Entry Points
+{% for ep in system_context.entry_points %}
+- `{{ ep }}`
+{% endfor %}
+{% endif %}
+
+{% if system_context.config_files %}
+### Configuration Files
+{% for cf in system_context.config_files %}
+- `{{ cf }}`
+{% endfor %}
+{% endif %}
+
+{% if system_context.api_endpoints %}
+### API Endpoints
+| Module | Method | Path |
+|--------|--------|------|
+{% for ep in system_context.api_endpoints %}
+| {{ ep.module }} | {{ ep.get("method", "?") }} | `{{ ep.get("path", ep.get("route", "?")) }}` |
+{% endfor %}
+{% endif %}
+
 ## Overview
 - **Languages:** {{ languages | join(", ") or "none detected" }}
 - **Modules:** {{ total_modules }}

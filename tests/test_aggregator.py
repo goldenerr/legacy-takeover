@@ -17,6 +17,32 @@ class TestScanResult:
         assert r.total_tables == 0
         assert r.total_risks == 0
         assert r.top_risks == []
+        assert r.system_context == {}
+        assert r.system_purpose == ""
+
+    def test_system_context_field(self):
+        """system_context is populated and system_purpose property works."""
+        ctx = {
+            "purpose": "Backup data management service",
+            "readme_summary": "A Spring Boot service for managing backup data.",
+            "entry_points": ["BackupController", "DataService"],
+            "api_endpoints": [
+                {"module": "BackupController", "method": "GET", "path": "/api/backups"},
+            ],
+            "config_files": ["application.yml", "pom.xml"],
+        }
+        r = ScanResult(
+            repo_name="test", repo_url="http://x",
+            system_context=ctx,
+        )
+        assert r.system_context == ctx
+        assert r.system_purpose == "Backup data management service"
+        assert r.system_context["entry_points"] == ["BackupController", "DataService"]
+        assert len(r.system_context["api_endpoints"]) == 1
+
+    def test_system_purpose_defaults_to_empty(self):
+        r = ScanResult(repo_name="test", repo_url="http://x")
+        assert r.system_purpose == ""
 
     def test_risk_summary_correct_counts(self):
         risks = [

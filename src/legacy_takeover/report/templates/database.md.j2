@@ -1,5 +1,7 @@
 # {{ repo_name }} — Database Schema
 
+**System:** {{ system_purpose or "Unknown" }}
+
 {% for ed in er_diagrams %}
 ## {{ ed.language | title }} — {{ ed.orm_framework }}
 

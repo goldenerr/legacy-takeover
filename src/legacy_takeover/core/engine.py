@@ -63,7 +63,75 @@ def run_scan(
                 risks = plugin.assess_risks()
                 plugins_data.append((mg, dt, ed, risks))
 
-            result = aggregate_results(repo_name, repo_url, plugins_data, depth)
+            # Build system-level context from README, plugins, and module metadata.
+            system_ctx: dict[str, object] = {}
+
+            # 1. Read README.md first paragraph.
+            readme_candidates = list(repo_path.glob("README*"))
+            if readme_candidates:
+                try:
+                    text = readme_candidates[0].read_text()
+                    first_para = text.split("\n\n")[0].strip().replace("# ", "")
+                    system_ctx["readme_summary"] = first_para[:500]
+                except Exception:
+                    pass
+
+            # 2. Guess purpose from readme summary + plugin entry points.
+            purpose_parts: list[str] = []
+            readme_summary = system_ctx.get("readme_summary", "")
+            if readme_summary:
+                purpose_parts.append(str(readme_summary)[:200])
+            for plugin in matched:
+                if hasattr(plugin, "_entry_points") and plugin._entry_points:
+                    purpose_parts.append(
+                        "Entry: " + ", ".join(str(ep) for ep in plugin._entry_points[:3])
+                    )
+            system_ctx["purpose"] = " | ".join(purpose_parts) if purpose_parts else "Unknown"
+
+            # 3. Collect API endpoints from module metadata.
+            endpoints: list[dict] = []
+            ep_names: list[str] = []
+            for mg, _dt, _ed, _risks in plugins_data:
+                for m in mg.modules:
+                    meta_endpoints = m.metadata.get("endpoints", [])
+                    if meta_endpoints:
+                        for ep in meta_endpoints:
+                            endpoints.append({"module": m.name, **ep})
+                    # Also collect entry point names from module annotations.
+                    annotations = m.metadata.get("annotations", [])
+                    for ann in annotations:
+                        if ann in (
+                            "RestController", "Controller", "RequestMapping",
+                            "GetMapping", "PostMapping", "PutMapping", "DeleteMapping",
+                            "PatchMapping", "app.route", "route", "Flask",
+                        ) or ann.lower().endswith("controller"):
+                            ep_names.append(m.name)
+            system_ctx["api_endpoints"] = endpoints[:50]
+            system_ctx["entry_points"] = ep_names[:20]
+
+            # 4. Collect config files.
+            config_patterns = {
+                "*.yml", "*.yaml", "*.toml", "*.ini", "*.cfg", "*.conf",
+                "*.properties", "*.env", "*.json",
+            }
+            config_files: list[str] = []
+            for pat in config_patterns:
+                for cf in repo_path.glob(pat):
+                    # Only include recognized config filenames.
+                    if cf.name.lower() in {
+                        "application.yml", "application.yaml", "application.properties",
+                        "application.toml", "settings.py", "config.py", "pyproject.toml",
+                        "cargo.toml", "package.json", "tsconfig.json", "go.mod",
+                        "pom.xml", "build.gradle", "build.gradle.kts",
+                        "docker-compose.yml", "docker-compose.yaml",
+                        ".env", ".env.example", "makefile", "cmakelists.txt",
+                    } or cf.name.endswith(".config.js") or cf.name.endswith(".config.ts"):
+                        config_files.append(cf.name)
+            system_ctx["config_files"] = sorted(set(config_files))[:30]
+
+            result = aggregate_results(
+                repo_name, repo_url, plugins_data, depth, system_context=system_ctx,
+            )
 
             # Optional report rendering (soft dependency).
             if output_dir:

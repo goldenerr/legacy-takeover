@@ -17,7 +17,18 @@ def scan_result():
     ed = ERDiagram(language="python", tables=[])
     risks = [Risk(id="R01", category=RiskCategory.SECURITY, severity=RiskSeverity.HIGH,
                   confidence=0.9, title="Test", description="Test risk")]
-    result = ScanResult(repo_name="test", repo_url="git@x", depth="standard")
+    result = ScanResult(
+        repo_name="test", repo_url="git@x", depth="standard",
+        system_context={
+            "purpose": "A test Python API service",
+            "readme_summary": "This is a test project for report rendering.",
+            "entry_points": ["api"],
+            "api_endpoints": [
+                {"module": "api", "method": "GET", "path": "/health"},
+            ],
+            "config_files": ["pyproject.toml"],
+        },
+    )
     result.module_graphs = [mg]; result.dependency_trees = [dt]
     result.er_diagrams = [ed]; result.all_risks = risks
     return result
@@ -65,3 +76,21 @@ class TestRenderReport:
         assert (data / "modules.json").exists()
         assert (data / "dependencies.json").exists()
         assert (data / "risks.json").exists()
+
+    def test_system_context_in_manual(self, tmp_path, scan_result):
+        """system_context appears in the SYSTEM_MANUAL.md output."""
+        render_report(scan_result, tmp_path)
+        report_dirs = [d for d in tmp_path.iterdir() if d.is_dir()]
+        manual = report_dirs[0] / "SYSTEM_MANUAL.md"
+        content = manual.read_text()
+        assert "A test Python API service" in content
+        assert "This is a test project" in content
+
+    def test_system_context_in_html(self, tmp_path, scan_result):
+        """system_context appears in the HTML report."""
+        render_report(scan_result, tmp_path)
+        report_dirs = [d for d in tmp_path.iterdir() if d.is_dir()]
+        html = report_dirs[0] / "index.html"
+        content = html.read_text()
+        assert "A test Python API service" in content
+        assert "/health" in content

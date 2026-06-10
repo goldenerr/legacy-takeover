@@ -5,11 +5,27 @@
 
 {{ mg.summary }}
 
-| Module | Type | Path |
-|--------|------|------|
+| Module | Type | Path | Annotations |
+|--------|------|------|-------------|
 {% for m in mg.modules %}
-| {{ m.name }} | {{ m.type.value }} | {{ m.path }} |
+| {{ m.name }} | {{ m.type.value }} | `{{ m.path }}` | {{ m.metadata.get("annotations", []) | join(", ") or "—" }} |
 {% endfor %}
+
+{% set ns = namespace(has_endpoints=false) %}
+{% for m in mg.modules %}
+{% if m.metadata.get("endpoints") %}{% set ns.has_endpoints = true %}{% endif %}
+{% endfor %}
+{% if ns.has_endpoints %}
+### API Endpoints
+
+| Module | Method | Path |
+|--------|--------|------|
+{% for m in mg.modules %}
+{% for ep in m.metadata.get("endpoints", []) %}
+| {{ m.name }} | {{ ep.get("method", "?") }} | `{{ ep.get("path", ep.get("route", "?")) }}` |
+{% endfor %}
+{% endfor %}
+{% endif %}
 
 ### Component Diagram
 
