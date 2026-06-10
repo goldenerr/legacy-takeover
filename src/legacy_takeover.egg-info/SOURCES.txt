@@ -1,0 +1,12 @@
+pyproject.toml
+src/legacy_takeover/__init__.py
+src/legacy_takeover.egg-info/PKG-INFO
+src/legacy_takeover.egg-info/SOURCES.txt
+src/legacy_takeover.egg-info/dependency_links.txt
+src/legacy_takeover.egg-info/entry_points.txt
+src/legacy_takeover.egg-info/requires.txt
+src/legacy_takeover.egg-info/top_level.txt
+src/legacy_takeover/core/__init__.py
+src/legacy_takeover/plugins/__init__.py
+src/legacy_takeover/report/__init__.py
+src/legacy_takeover/risk/__init__.py

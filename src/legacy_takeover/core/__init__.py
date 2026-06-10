@@ -1,0 +1,1 @@
+"""Legacy Takeover Assistant."""

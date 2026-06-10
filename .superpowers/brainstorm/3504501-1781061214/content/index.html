@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>架构方案对比</title>
+<style>
+  :root {
+    --bg: #0d1117; --card-bg: #161b22; --border: #30363d;
+    --text: #c9d1d9; --text-secondary: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --orange: #d2991d; --red: #f85149;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); padding: 40px; }
+  .container { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 1.6em; margin-bottom: 4px; }
+  .subtitle { color: var(--text-secondary); margin-bottom: 28px; font-size: 0.9em; }
+
+  .approaches { display: flex; gap: 16px; margin-bottom: 32px; }
+  .approach {
+    flex: 1;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .approach.recommended { border-color: #1f6feb; box-shadow: 0 0 0 1px #1f6feb; }
+  .approach h3 { font-size: 1.05em; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.7em; font-weight: 600; }
+  .badge-blue { background: #1f6feb33; color: var(--accent); }
+  .badge-red { background: #da363333; color: var(--red); }
+  .badge-orange { background: #9e6a0333; color: var(--orange); }
+  .pros-cons { margin-top: 14px; }
+  .pro, .con { font-size: 0.85em; margin: 4px 0; padding-left: 16px; position: relative; line-height: 1.4; }
+  .pro::before { content: '+'; color: var(--green); position: absolute; left: 0; font-weight: bold; }
+  .con::before { content: '−'; color: var(--red); position: absolute; left: 0; font-weight: bold; }
+
+  .rec-section { background: #1f6feb0a; border: 1px solid #1f6feb44; border-radius: 12px; padding: 24px; margin-top: 20px; }
+  .rec-section h2 { color: var(--accent); font-size: 1.15em; margin-bottom: 12px; }
+
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.88em; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  th { color: var(--text-secondary); font-weight: 500; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.05em; }
+  tr:last-child td { border: none; }
+  .stack { display: flex; gap: 4px; flex-wrap: wrap; }
+  .stack span { background: #30363d; padding: 2px 8px; border-radius: 4px; font-size: 0.82em; }
+
+  .flow { display: flex; align-items: center; gap: 8px; margin: 20px 0; font-size: 0.9em; flex-wrap: wrap; color: var(--text-secondary); }
+  .flow-box { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 16px; font-weight: 600; color: var(--text); white-space: nowrap; }
+  .flow-arrow { color: var(--accent); font-size: 1.1em; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🏗️ 架构方案对比</h1>
+  <p class="subtitle">基于已确认的需求：插件化引擎 · CLI+Skill+Web · MD+Mermaid+HTML · 可配置风险</p>
+
+  <div class="approaches">
+    <div class="approach">
+      <h3>A: 单体 Python <span class="badge badge-red">不推荐</span></h3>
+      <p style="font-size:0.88em;color:var(--text-secondary);margin-bottom:10px">一个 Python 包，CLI 入口调用内部分析模块，报告直接写文件。</p>
+      <div class="pros-cons">
+        <div class="pro">开发快，1-2 天可出 MVP</div>
+        <div class="pro">零依赖推理（纯 Python）</div>
+        <div class="con">插件耦合在核心里，加语言要改核心</div>
+        <div class="con">Web 服务是后加的外壳，两层维护</div>
+        <div class="con">大仓库 OOM 风险</div>
+      </div>
+    </div>
+
+    <div class="approach recommended">
+      <h3>B: 分层插件架构 <span class="badge badge-blue">推荐</span></h3>
+      <p style="font-size:0.88em;color:var(--text-secondary);margin-bottom:10px">核心引擎 + 插件接口 + 报告层分离。CLI/Skill/Web 共享同一核心。</p>
+      <div class="pros-cons">
+        <div class="pro">插件隔离，新语言 200 行不改核心</div>
+        <div class="pro">核心可独立测试，报告层可替换</div>
+        <div class="pro">CLI/Web/Skill 一套代码</div>
+        <div class="con">前期多 1-2 天搭框架</div>
+        <div class="con">插件发现机制需要约定</div>
+      </div>
+    </div>
+
+    <div class="approach">
+      <h3>C: 微服务拆开 <span class="badge badge-orange">过度设计</span></h3>
+      <p style="font-size:0.88em;color:var(--text-secondary);margin-bottom:10px">分析/报告/Web 各一个服务，消息队列通信，可水平扩展。</p>
+      <div class="pros-cons">
+        <div class="pro">大仓库可分布式扫描</div>
+        <div class="pro">各组件独立部署升级</div>
+        <div class="con">MVP 阶段纯浪费，运维成本高</div>
+        <div class="con">调试链路长，不适合迭代初期</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rec-section">
+    <h2>✅ 推荐方案 B：分层插件架构</h2>
+    <table>
+      <tr><th style="width:130px">层</th><th>职责</th><th style="width:220px">技术选型</th></tr>
+      <tr>
+        <td><strong>CLI / Skill / Web</strong></td>
+        <td>入口层：接收输入（Git URL / 本地路径），触发扫描，输出报告</td>
+        <td><div class="stack"><span>Click (CLI)</span><span>FastAPI (Web)</span><span>Hermes Skill</span></div></td>
+      </tr>
+      <tr>
+        <td><strong>Core Engine</strong></td>
+        <td>调度 → 克隆仓库 → 语言检测 → 分发插件 → 聚合结果 → 风险评分</td>
+        <td><div class="stack"><span>Python 3.11+</span><span>asyncio</span><span>tree-sitter (AST)</span></div></td>
+      </tr>
+      <tr>
+        <td><strong>Plugin Layer</strong></td>
+        <td>每个插件实现：结构提取 · 依赖分析 · DB schema · 风险评估</td>
+        <td><div class="stack"><span>Python ABC</span><span>pydantic 模型</span><span>插件发现(entry_points)</span></div></td>
+      </tr>
+      <tr>
+        <td><strong>Report Layer</strong></td>
+        <td>渲染：MD 说明书 · Mermaid 图 · HTML 索引 · 风险矩阵</td>
+        <td><div class="stack"><span>Jinja2 模板</span><span>Mermaid.js</span><span>Markdown</span></div></td>
+      </tr>
+    </table>
+
+    <div class="flow">
+      <div class="flow-box">Git URL</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box">Clone</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box">Detect</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box">Plugin A</div>
+      <span class="flow-arrow">+</span>
+      <div class="flow-box">Plugin B</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box">Aggregate</div>
+      <span class="flow-arrow">→</span>
+      <div class="flow-box">Report</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

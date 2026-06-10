@@ -1,0 +1,11 @@
+[console_scripts]
+legacy-scan = legacy_takeover.cli:main
+
+[legacy_takeover.analyzers]
+c = legacy_takeover.plugins.c:CAnalyzer
+cpp = legacy_takeover.plugins.cpp:CppAnalyzer
+csharp = legacy_takeover.plugins.csharp:CSharpAnalyzer
+go = legacy_takeover.plugins.go:GoAnalyzer
+java = legacy_takeover.plugins.java:JavaAnalyzer
+python = legacy_takeover.plugins.python:PythonAnalyzer
+typescript = legacy_takeover.plugins.typescript:TypeScriptAnalyzer
