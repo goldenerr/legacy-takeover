@@ -35,10 +35,10 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv pip install -e .
 ```
 
-**方式二：pip**
+**方式二：pip3**
 
 ```bash
-pip install -e .
+pip3 install -e .
 ```
 
 安装后 `legacy-scan` 命令全局可用。验证：
