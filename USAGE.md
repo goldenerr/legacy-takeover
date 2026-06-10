@@ -16,12 +16,37 @@
 
 ## 安装
 
+### 1. 克隆仓库
+
 ```bash
-cd /home/hermes/.hermes/projects/legacy-takeover
+git clone git@github.com:goldenerr/legacy-takeover.git
+cd legacy-takeover
+```
+
+### 2. 安装
+
+**方式一：uv（推荐）**
+
+```bash
+# 如果没有 uv，先安装：
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 安装项目
 uv pip install -e .
 ```
 
-安装后 `legacy-scan` 命令全局可用。
+**方式二：pip**
+
+```bash
+pip install -e .
+```
+
+安装后 `legacy-scan` 命令全局可用。验证：
+
+```bash
+legacy-scan --version
+# 输出: legacy-scan, version 0.1.0
+```
 
 ---
 
